@@ -1,11 +1,15 @@
 <?php
 require_once 'vendor/autoload.php';
+$GLOBALS['DB']->ShowSqlStat = true;
+// TODO: ?show_cache_stat=Y
 
+use Bitrix\Main\Data\Cache;
 use Clockwork\Support\Vanilla\Clockwork;
 use Bitrix\Main\Application as BitrixApp;
 use Bitrix\Main\DB\Connection as BitrixConnection;
 use Bitrix\Main\Diag\SqlTracker as BitrixSqlTracker;
 use Bitrix\Main\Loader as BitrixLoader;
+use Bitrix\Main\Diag\Debug;
 
 // init before using for clock() helper available
 ClockworkAdapter::init();
@@ -21,6 +25,7 @@ class ClockworkAdapter {
     private static ?Clockwork $profiler;
     private static BitrixConnection $bitrixConnection;
     private static BitrixSqlTracker $bitrixSqlTracker;
+    private static CDebugInfo $debug;
 
     public static function getProfiler(): Clockwork
     {
@@ -38,11 +43,31 @@ class ClockworkAdapter {
 
         // start Bitrix SQL tracker
         clock('Start Bitrix SQL tracker');
+
+        static::$debug = new CDebugInfo();
+        static::$debug->Start();
+
         static::$bitrixConnection = BitrixApp::getInstance()->getConnection();
         static::$bitrixSqlTracker = static::$bitrixConnection->startTracker();
+
+        //static::$debug->savedTracker = static::$bitrixConnection->startTracker();
     }
 
     public static function onEpilog()
+    {
+        clock('onEpilog');
+        clock('Add SQL queries');
+        static::addDb();
+        clock('Stop Bitrix SQL tracker');
+        static::$debug->Stop();
+        //Debug::dump(static::$debug->arResult['CACHE']);
+        clock('Bitrix Cache tracker');
+        static::addCache();
+        clock('End request');
+        static::getProfiler()->requestProcessed();
+    }
+
+    public static function addDb()
     {
         foreach (static::$bitrixSqlTracker->getQueries() as $query) {
             clock()->addDatabaseQuery(
@@ -55,12 +80,20 @@ class ClockworkAdapter {
                 ]
             );
         }
+    }
 
-        clock('onEpilog');
-        clock('Stop Bitrix SQL tracker');
-        static::$bitrixConnection->stopTracker();
-        clock('End request');
-        static::getProfiler()->requestProcessed();
+    public static function addCache()
+    {
+        $tracks = static::$debug->arResult['CACHE'];
+        foreach ($tracks as $track) {
+            $key = $track['initdir'] . ' (' .$track['cache_size'] . 'B)';
+            clock()->addCacheQuery($track['path'], $key, $track['cache_size'], 1, $data = [
+                'file' => $track['callee_func'],
+                'line' => 0,
+                'trace' => $track['TRACE'],
+                'connection' => $track['callee_func']
+            ]);
+        }
     }
 }
 
